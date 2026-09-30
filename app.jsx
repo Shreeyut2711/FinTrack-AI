@@ -38,7 +38,11 @@ const iconPaths = {
   Download: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />,
   X: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />,
   Check: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />,
-  Send: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+  Send: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />,
+  Mic: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z M19 10v2a7 7 0 01-14 0v-2 M12 19v4 M8 23h8" />,
+  MicOff: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M1 1l22 22 M9 9v3a3 3 0 005.12 2.12 M15 9.34V4a3 3 0 00-5.94-.6 M17 11a5 5 0 01-1 3.1 M5.1 5.1A7 7 0 005 12v1a7 7 0 0011.9 4.9 M12 19v4 M8 23h8" />,
+  Volume2: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5L6 9H2v6h4l5 4V5z M19.07 4.93a10 10 0 010 14.14 M15.54 8.46a5 5 0 010 7.07" />,
+  VolumeX: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5L6 9H2v6h4l5 4V5z M23 9l-6 6 M17 9l6 6" />
 };
 
 function Icon({ name, size = 18, className = "" }) {
@@ -149,6 +153,13 @@ function MainApp() {
   const [isAIChatOpen, setIsAIChatOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
+  // Voice AI Assistant States
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceLang, setVoiceLang] = useState("en-IN"); // "en-IN" or "hi-IN"
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [pendingVoiceAction, setPendingVoiceAction] = useState(null);
+  const [transcriptText, setTranscriptText] = useState("");
+
   // New Transaction Form State
   const [newTx, setNewTx] = useState({
     name: "",
@@ -161,7 +172,7 @@ function MainApp() {
   // AI Chat Messages
   const [aiChatInput, setAiChatInput] = useState("");
   const [aiMessages, setAiMessages] = useState([
-    { sender: "ai", text: "Hi Sneha! 👋 I'm your AI Money Buddy. How can I help you budget or save money today?" }
+    { sender: "ai", text: "Hi Sneha! 👋 I'm your AI Money Buddy. How can I help you budget or save money today? You can also tap the microphone button to talk to me!" }
   ]);
 
   // Goal Progress State
@@ -302,29 +313,216 @@ function MainApp() {
     a.click();
   };
 
-  // AI Chat Handler
-  const handleSendAIChat = (textToSend) => {
-    const query = textToSend || aiChatInput;
-    if (!query.trim()) return;
+  // Text to Speech Helper
+  const speakText = (text) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = voiceLang;
+    utterance.rate = 1.0;
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    window.speechSynthesis.speak(utterance);
+  };
 
-    const newMessages = [...aiMessages, { sender: "user", text: query }];
-    setAiMessages(newMessages);
-    setAiChatInput("");
+  const stopSpeaking = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+  };
 
-    // Simulated Smart AI responses
-    setTimeout(() => {
-      let reply = "Based on your spending patterns, you are doing great! Keep track of smaller expenses like campus snacks to save even more.";
-      const lower = query.toLowerCase();
-      if (lower.includes("food") || (lower.includes("swiggy") || lower.includes("canteen"))) {
-        reply = `You've spent ₹${spendingData.find(s => s.name === "Food & Snacks")?.value || 330} on Food & Snacks recently. Ordering in 2 fewer times could save you ₹450 per week!`;
-      } else if (lower.includes("headphones") || lower.includes("save")) {
-        reply = `Your 'New Headphones' goal is currently at ${Math.round((goalSaved / goalTarget) * 100)}% (₹${goalSaved}/₹${goalTarget}). If you save ₹300 per week, you'll hit your target in just 8 weeks!`;
-      } else if (lower.includes("budget") || lower.includes("score")) {
-        reply = `Your Financial Health Score is 88/100 🌟. Excellent savings rate (36%) and healthy pocket money balance of ₹${currentBalance.toLocaleString("en-IN")}.`;
+  // Speech Recognition Ref & Controls
+  const recognitionRef = React.useRef(null);
+
+  const startVoiceRecording = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Speech Recognition API is not supported in your browser. Please use Chrome or Edge.");
+      return;
+    }
+
+    try {
+      stopSpeaking();
+      setIsAIChatOpen(true);
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = voiceLang;
+
+      recognition.onstart = () => {
+        setIsRecording(true);
+        setTranscriptText("Listening...");
+      };
+
+      recognition.onresult = (event) => {
+        let current = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          current += event.results[i][0].transcript;
+        }
+        setTranscriptText(current);
+      };
+
+      recognition.onerror = (event) => {
+        console.error("Speech recognition error:", event.error);
+        setIsRecording(false);
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+        setTranscriptText((finalText) => {
+          if (finalText && finalText !== "Listening..." && finalText.trim()) {
+            handleVoiceQuery(finalText.trim());
+          }
+          return "";
+        });
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (e) {
+      console.error("Error starting voice recording:", e);
+      setIsRecording(false);
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    setIsRecording(false);
+  };
+
+  // Voice Query Handler (API + Client Fallback)
+  const handleVoiceQuery = async (queryText) => {
+    if (!queryText) return;
+
+    setAiMessages(prev => [...prev, { sender: "user", text: queryText }]);
+    setIsAIChatOpen(true);
+
+    const payload = {
+      query: queryText,
+      financialContext: {
+        totalSpent,
+        totalReceived,
+        currentBalance,
+        spendingData,
+        lastTransactions: transactions.slice(0, 5)
+      },
+      pendingAction: pendingVoiceAction
+    };
+
+    try {
+      const res = await fetch('http://localhost:3001/api/voice-assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+
+        if (data.executeAction && data.executeAction.type === "CREATE_TRANSACTION") {
+          executeCreateVoiceTransaction(data.executeAction.tx);
+          setPendingVoiceAction(null);
+        } else if (data.pendingAction) {
+          setPendingVoiceAction(data.pendingAction);
+        } else if (data.clearPending) {
+          setPendingVoiceAction(null);
+        }
+
+        setAiMessages(prev => [...prev, { sender: "ai", text: data.textResponse }]);
+        speakText(data.speechText || data.textResponse);
+        return;
       }
+    } catch (e) {
+      console.warn("Backend server not connected. Executing voice assistant in client mode.", e);
+    }
 
-      setAiMessages([...newMessages, { sender: "ai", text: reply }]);
-    }, 600);
+    // Client-side fallback if backend port 3001 is offline
+    processClientVoiceFallback(queryText);
+  };
+
+  const executeCreateVoiceTransaction = (tx) => {
+    const createdTx = {
+      id: Date.now(),
+      name: tx.name,
+      cat: tx.cat,
+      date: new Date().toLocaleDateString("en-GB", { day: '2-digit', month: 'short', year: 'numeric' }),
+      amt: tx.type === "expense" ? -Math.abs(tx.amt) : Math.abs(tx.amt),
+      color: tx.type === "income" ? "#059669" : (categoryColors[tx.cat] || "#6366F1"),
+      initial: tx.name.charAt(0).toUpperCase()
+    };
+    setTransactions(prev => [createdTx, ...prev]);
+  };
+
+  const processClientVoiceFallback = (queryText) => {
+    const q = queryText.toLowerCase();
+
+    // Check confirmation of pending voice action
+    if (pendingVoiceAction && pendingVoiceAction.type === "ADD_TRANSACTION_CONFIRMATION") {
+      const pos = ["yes", "yeah", "sure", "add", "confirm", "ok", "okay", "haan", "sahi hai"];
+      const neg = ["no", "cancel", "stop", "mat karo", "nhi"];
+
+      if (pos.some(w => q.includes(w))) {
+        const tx = pendingVoiceAction.tx;
+        executeCreateVoiceTransaction(tx);
+        setPendingVoiceAction(null);
+        const msg = `Done! Saved ${tx.type} of ₹${tx.amt} under ${tx.cat}.`;
+        setAiMessages(prev => [...prev, { sender: "ai", text: msg }]);
+        speakText(msg);
+        return;
+      } else if (neg.some(w => q.includes(w))) {
+        setPendingVoiceAction(null);
+        const msg = "Cancelled transaction request.";
+        setAiMessages(prev => [...prev, { sender: "ai", text: msg }]);
+        speakText(msg);
+        return;
+      }
+    }
+
+    // Parse transaction addition command
+    if (q.includes("add") || q.includes("spent") || q.includes("paid") || q.includes("bought")) {
+      const amountMatch = q.match(/(?:₹|rs|rupees)?\s*(\d+(?:\.\d+)?)/i);
+      const amt = amountMatch ? parseFloat(amountMatch[1]) : null;
+
+      if (amt) {
+        let cat = "Others";
+        if (q.includes("food") || q.includes("swiggy") || q.includes("canteen")) cat = "Food & Snacks";
+        else if (q.includes("uber") || q.includes("travel") || q.includes("auto")) cat = "Transportation";
+        else if (q.includes("shopping") || q.includes("zara")) cat = "Shopping";
+        else if (q.includes("movie") || q.includes("cinema")) cat = "Entertainment";
+        else if (q.includes("book") || q.includes("stationery")) cat = "Stationery";
+
+        const type = q.includes("received") || q.includes("income") ? "income" : "expense";
+        const title = `${cat} ${type === "income" ? "Income" : "Expense"}`;
+
+        const pendingTx = { name: title, amt, cat, type, date: new Date().toISOString().split("T")[0] };
+        setPendingVoiceAction({ type: "ADD_TRANSACTION_CONFIRMATION", tx: pendingTx });
+
+        const confirmMsg = `Should I add an ${type} of ₹${amt} under ${cat} for today?`;
+        setAiMessages(prev => [...prev, { sender: "ai", text: confirmMsg }]);
+        speakText(confirmMsg);
+        return;
+      }
+    }
+
+    // Q&A Answers
+    let reply = `Your current balance is ₹${currentBalance.toLocaleString("en-IN")}. Total spent this month is ₹${totalSpent.toLocaleString("en-IN")}.`;
+    if (q.includes("spend") || q.includes("spent")) {
+      reply = `You have spent ₹${totalSpent.toLocaleString("en-IN")} so far.`;
+    } else if (q.includes("income") || q.includes("received")) {
+      reply = `You have received ₹${totalReceived.toLocaleString("en-IN")} in pocket money.`;
+    } else if (q.includes("save") || q.includes("savings")) {
+      reply = `You have saved approximately ₹${Math.max(0, currentBalance - 5000).toLocaleString("en-IN")}.`;
+    } else if (q.includes("last 5") || q.includes("recent")) {
+      const summary = transactions.slice(0, 5).map(t => `${t.name}: ₹${Math.abs(t.amt)}`).join(", ");
+      reply = `Your last 5 transactions are: ${summary}.`;
+    }
+
+    setAiMessages(prev => [...prev, { sender: "ai", text: reply }]);
+    speakText(reply);
   };
 
   return (
@@ -928,12 +1126,34 @@ function MainApp() {
                 <div className="text-[10px] text-indigo-200 leading-none mt-1">Smart Pocket Money Advisor</div>
               </div>
             </div>
-            <button
-              onClick={() => setIsAIChatOpen(false)}
-              className="p-1 rounded-lg text-white/80 hover:text-white transition"
-            >
-              <Icon name="X" size={18} />
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Language Selector */}
+              <button
+                onClick={() => setVoiceLang(voiceLang === "en-IN" ? "hi-IN" : "en-IN")}
+                className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-xs font-bold transition flex items-center gap-1"
+                title="Toggle Voice Language (English / Hindi)"
+              >
+                🌐 {voiceLang === "en-IN" ? "EN" : "HI"}
+              </button>
+
+              {/* Stop Audio Button */}
+              {isSpeaking && (
+                <button
+                  onClick={stopSpeaking}
+                  className="p-1.5 bg-rose-500 hover:bg-rose-600 text-white rounded-lg transition"
+                  title="Stop Audio Speech"
+                >
+                  <Icon name="VolumeX" size={16} />
+                </button>
+              )}
+
+              <button
+                onClick={() => setIsAIChatOpen(false)}
+                className="p-1 rounded-lg text-white/80 hover:text-white transition"
+              >
+                <Icon name="X" size={18} />
+              </button>
+            </div>
           </div>
 
           {/* Chat message thread */}
@@ -953,20 +1173,74 @@ function MainApp() {
                 </div>
               </div>
             ))}
+
+            {/* Live Recording Speech Visualizer */}
+            {isRecording && (
+              <div className="p-3 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-100 dark:border-indigo-900/50 rounded-2xl animate-fade-in flex items-center gap-3">
+                <div className="flex items-center gap-1 h-5 shrink-0">
+                  <span className="w-1 bg-rose-500 rounded-full wave-bar-1" />
+                  <span className="w-1 bg-rose-500 rounded-full wave-bar-2" />
+                  <span className="w-1 bg-rose-500 rounded-full wave-bar-3" />
+                  <span className="w-1 bg-rose-500 rounded-full wave-bar-4" />
+                </div>
+                <div className="text-xs text-indigo-900 dark:text-indigo-200 font-semibold truncate flex-1">
+                  {transcriptText || "Listening..."}
+                </div>
+                <button
+                  onClick={stopVoiceRecording}
+                  className="px-2.5 py-1 bg-rose-500 text-white rounded-lg text-[11px] font-bold"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
+            {/* Voice Transaction Confirmation Card */}
+            {pendingVoiceAction && pendingVoiceAction.type === "ADD_TRANSACTION_CONFIRMATION" && (
+              <div className="p-4 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/60 rounded-2xl animate-fade-in space-y-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-800 dark:text-amber-300">
+                  <Icon name="Info" size={16} /> Confirm Voice Transaction
+                </div>
+                <div className="text-xs text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-900 p-3 rounded-xl border border-amber-100 dark:border-amber-900/40 space-y-1">
+                  <div><span className="font-semibold text-slate-400">Title:</span> {pendingVoiceAction.tx.name}</div>
+                  <div><span className="font-semibold text-slate-400">Amount:</span> ₹{pendingVoiceAction.tx.amt}</div>
+                  <div><span className="font-semibold text-slate-400">Category:</span> {pendingVoiceAction.tx.cat}</div>
+                  <div><span className="font-semibold text-slate-400">Type:</span> {pendingVoiceAction.tx.type}</div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleVoiceQuery("yes")}
+                    className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition shadow-sm"
+                  >
+                    ✓ Yes, Save
+                  </button>
+                  <button
+                    onClick={() => handleVoiceQuery("no")}
+                    className="flex-1 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs rounded-xl transition"
+                  >
+                    ✕ Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Quick Prompts */}
           <div className="p-3 bg-white dark:bg-slate-800 border-t border-slate-100 dark:border-slate-700 space-y-2">
-            <div className="text-[10px] font-bold uppercase text-slate-400">Quick Prompts</div>
+            <div className="flex items-center justify-between text-[10px] font-bold uppercase text-slate-400">
+              <span>Voice Prompts</span>
+              <span>{voiceLang === "en-IN" ? "English" : "Hindi"}</span>
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {[
-                "How can I save ₹500?",
-                "Analyze Swiggy spend",
-                "Headphones goal update"
+                "Add 500 rupees for food today",
+                "How much did I spend this month?",
+                "Show my last 5 transactions",
+                "How much money did I save?"
               ].map((chip) => (
                 <button
                   key={chip}
-                  onClick={() => handleSendAIChat(chip)}
+                  onClick={() => handleVoiceQuery(chip)}
                   className="text-[11px] bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-300 px-2.5 py-1 rounded-lg font-semibold border border-indigo-100 dark:border-indigo-900/40 hover:bg-indigo-100 transition"
                 >
                   {chip}
@@ -975,18 +1249,38 @@ function MainApp() {
             </div>
           </div>
 
-          {/* Input Box */}
-          <div className="p-3 bg-white dark:bg-slate-800 border-t border-slate-100 dark:border-slate-700 flex gap-2">
+          {/* Input Box & Voice Controls */}
+          <div className="p-3 bg-white dark:bg-slate-800 border-t border-slate-100 dark:border-slate-700 flex items-center gap-2">
+            <button
+              onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 shadow-sm transition ${isRecording
+                ? "bg-rose-500 text-white mic-active-pulse"
+                : "bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-200"
+                }`}
+              title={isRecording ? "Stop Recording" : "Start Voice Recording"}
+            >
+              <Icon name={isRecording ? "MicOff" : "Mic"} size={17} />
+            </button>
             <input
               type="text"
-              placeholder="Ask AI money buddy..."
+              placeholder="Ask AI or speak..."
               value={aiChatInput}
               onChange={(e) => setAiChatInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSendAIChat()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && aiChatInput.trim()) {
+                  handleVoiceQuery(aiChatInput.trim());
+                  setAiChatInput("");
+                }
+              }}
               className="flex-1 px-3.5 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs focus:outline-none focus:border-indigo-500 dark:text-white"
             />
             <button
-              onClick={() => handleSendAIChat()}
+              onClick={() => {
+                if (aiChatInput.trim()) {
+                  handleVoiceQuery(aiChatInput.trim());
+                  setAiChatInput("");
+                }
+              }}
               className="w-10 h-10 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl flex items-center justify-center shrink-0 shadow-sm transition"
             >
               <Icon name="Send" size={15} />
@@ -994,6 +1288,28 @@ function MainApp() {
           </div>
         </div>
       )}
+
+      {/* Floating Microphone Action Button */}
+      <div className="fixed bottom-6 right-6 z-40 flex items-center gap-3">
+        {isSpeaking && (
+          <button
+            onClick={stopSpeaking}
+            className="px-3 py-2 bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg flex items-center gap-1.5 animate-fade-in"
+          >
+            <Icon name="VolumeX" size={15} /> Stop Speech
+          </button>
+        )}
+        <button
+          onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+          className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl transition-all duration-300 active:scale-95 ${isRecording
+            ? "bg-rose-500 text-white mic-active-pulse"
+            : "bg-gradient-to-tr from-indigo-600 to-indigo-500 text-white hover:shadow-indigo-500/30 hover:scale-105"
+            }`}
+          title={isRecording ? "Stop Listening" : "Tap to Speak to AI Assistant"}
+        >
+          <Icon name={isRecording ? "MicOff" : "Mic"} size={24} />
+        </button>
+      </div>
 
     </div>
   );
